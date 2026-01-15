@@ -1,0 +1,27 @@
+[config.wallpaper]
+# Whether to set the wallpaper or not
+set = false
+
+# The base command to run for applying the wallpaper.
+# Keywords like {{ image }} or anything that works inside of hooks works here.
+# You could also set a static color if you use the color keywords and the wallpaper setter supports it.
+command = "swww img --transition-type grow --transition-pos center {{ image }}"
+
+[templates.hyprland]
+input_path = '~/.config/matugen/templates/hyprland-colours.conf'
+output_path = '~/.config/hypr/colours.conf'
+post_hook = 'hyprctl reload'
+
+[templates.kitty]
+input_path = '~/.config/matugen/templates/kitty-colours.conf'
+output_path = '~/.config/kitty/colours.conf'
+post_hook = 'kill -SIGUSR1 $(pgrep kitty)'
+
+[templates.rofi]
+input_path = '~/.config/matugen/templates/rofi-colours.rasi'
+output_path = '~/.config/rofi/colours.rasi'
+
+[templates.waybar]
+input_path = '~/.config/matugen/templates/colours.css'
+output_path = '~/.config/waybar/colours.css'
+post_hook = 'pkill waybar; waybar & disown'

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+swww img "$1" --transition-type grow --transition-pos center
+matugen image "$1"
+
+LINE_NUM=75
+ESCAPED=$(printf '%s\n' "$1" | sed 's/[&|]/\\&/g')
+NEW_TEXT="    background-image:            url(\"$ESCAPED\", height);"
+FILE="$HOME/.config/rofi/launchers/type-7/style-7.rasi"
+
+sed -i "${LINE_NUM}s|.*|${NEW_TEXT}|" "$FILE"
