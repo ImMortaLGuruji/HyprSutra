@@ -31,6 +31,9 @@ INSTALL_CHROME=${INSTALL_CHROME:-true}
 INSTALL_VSCODE=${INSTALL_VSCODE:-true}
 INSTALL_MATUGEN_METHOD=${INSTALL_MATUGEN_METHOD:-cargo}
 FONT_URL=${FONT_URL:-"https://github.com/ryanoasis/nerd-fonts/releases/download/v3.2.1/JetBrainsMono.zip"}
+INSTALL_NERD_FONT=${INSTALL_NERD_FONT:-true}
+SYSTEM_UPGRADE=${SYSTEM_UPGRADE:-false}
+INSTALL_WEAK_DEPS=${INSTALL_WEAK_DEPS:-false}
 ENABLE_BATTERY_TUNING=${ENABLE_BATTERY_TUNING:-true}
 MONITOR_NAME=${MONITOR_NAME:-"eDP-1"}
 MONITOR_RESOLUTION=${MONITOR_RESOLUTION:-"1920x1080"}
@@ -43,6 +46,11 @@ TARGET_USER="${SUDO_USER:-$USER}"
 TARGET_HOME=$(eval echo "~${TARGET_USER}")
 TARGET_UID=$(id -u "${TARGET_USER}")
 RSYNC_FLAGS="-a --checksum"
+DNF_INSTALL_FLAGS="-y"
+
+if [[ "${INSTALL_WEAK_DEPS}" == "false" ]]; then
+  DNF_INSTALL_FLAGS="${DNF_INSTALL_FLAGS} --setopt=install_weak_deps=False"
+fi
 
 if [[ "${DRY_RUN}" == "true" ]]; then
   info() { printf '\n[DRY RUN] %s\n' "$*"; }
@@ -55,6 +63,10 @@ info "Ensuring sudo session is active"
 sudo -v
 
 info "Detected Fedora ${FEDORA_VERSION}"
+
+# Clean up stale COPR repos that may not exist for newer Fedora releases.
+sudo dnf -y copr disable erikreider/swww >/dev/null 2>&1 || true
+sudo find /etc/yum.repos.d -maxdepth 1 -type f -name '*erikreider*swww*.repo' -delete 2>/dev/null || true
 
 if [[ "${GPU_VENDOR}" == "auto" ]]; then
   if command -v lspci >/dev/null 2>&1; then
@@ -86,26 +98,35 @@ has_user_systemd() {
 }
 
 info "Updating system and base tooling"
-sudo dnf -y upgrade --refresh
-sudo dnf -y install dnf-plugins-core curl wget unzip rsync git \
+if [[ "${SYSTEM_UPGRADE}" == "true" ]]; then
+  sudo dnf -y upgrade --refresh
+else
+  info "Skipping full system upgrade (set SYSTEM_UPGRADE=true to enable)"
+fi
+sudo dnf ${DNF_INSTALL_FLAGS} install dnf-plugins-core curl wget unzip rsync git \
   wl-clipboard brightnessctl playerctl pavucontrol \
-  grim slurp swappy polkit-gnome xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
+  grim slurp swappy mate-polkit xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
   kitty waybar rofi nautilus \
   network-manager-applet blueman bluez mako hypridle hyprlock xdg-user-dirs xdg-user-dirs-gtk
 
 info "Enabling COPR repos for Hyprland and swww"
-sudo dnf -y copr enable solopasha/hyprland
-sudo dnf -y copr enable erikreider/swww
+if ! sudo dnf -y copr enable solopasha/hyprland; then
+  info "Copr solopasha/hyprland not available for this Fedora release; continuing with default repos"
+fi
+if ! sudo dnf -y copr enable erikreider/swww; then
+  info "Copr erikreider/swww not available for this Fedora release; continuing with default repos"
+  sudo dnf -y copr disable erikreider/swww >/dev/null 2>&1 || true
+fi
 
 info "Installing Hyprland stack"
-sudo dnf -y install hyprland swww
+sudo dnf ${DNF_INSTALL_FLAGS} install hyprland swww
 
 case "${GPU_VENDOR}" in
   nvidia)
     info "Installing NVIDIA drivers via RPM Fusion"
-    sudo dnf -y install "https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
+    sudo dnf ${DNF_INSTALL_FLAGS} install "https://download1.rpmfusion.org/free/fedora/rpmfusion-free-release-$(rpm -E %fedora).noarch.rpm" \
       "https://download1.rpmfusion.org/nonfree/fedora/rpmfusion-nonfree-release-$(rpm -E %fedora).noarch.rpm"
-    sudo dnf -y install akmod-nvidia xorg-x11-drv-nvidia-cuda
+    sudo dnf ${DNF_INSTALL_FLAGS} install akmod-nvidia xorg-x11-drv-nvidia-cuda
 
     if [[ "${ENABLE_NVIDIA_ENV}" == "true" ]]; then
       info "Writing NVIDIA Wayland environment overrides"
@@ -137,7 +158,7 @@ gpgcheck=1
 gpgkey=https://dl.google.com/linux/linux_signing_key.pub
 EOF
   info "Installing Google Chrome"
-  sudo dnf -y install google-chrome-stable
+  sudo dnf ${DNF_INSTALL_FLAGS} install google-chrome-stable
 else
   info "Skipping Chrome (set INSTALL_CHROME=true to enable)"
 fi
@@ -154,7 +175,7 @@ gpgcheck=1
 gpgkey=https://packages.microsoft.com/keys/microsoft.asc
 EOF
   info "Installing VS Code"
-  sudo dnf -y install code
+  sudo dnf ${DNF_INSTALL_FLAGS} install code
 else
   info "Skipping VS Code (set INSTALL_VSCODE=true to enable)"
 fi
@@ -162,7 +183,7 @@ fi
 case "${INSTALL_MATUGEN_METHOD}" in
   cargo)
     info "Installing matugen via cargo"
-    sudo dnf -y install rust cargo gcc-c++ make pkg-config
+    sudo dnf ${DNF_INSTALL_FLAGS} install rust cargo gcc-c++ make pkg-config
     cargo install --locked matugen
     ;;
   skip)
@@ -174,13 +195,21 @@ case "${INSTALL_MATUGEN_METHOD}" in
     ;;
 esac
 
-info "Installing JetBrains Mono Nerd Font"
-tmpdir=$(mktemp -d)
-mkdir -p "$HOME/.local/share/fonts"
-curl -L "${FONT_URL}" -o "$tmpdir/font.zip"
-unzip -o "$tmpdir/font.zip" -d "$HOME/.local/share/fonts/JetBrainsMonoNerd" >/dev/null
-fc-cache -f
-rm -rf "$tmpdir"
+if [[ "${INSTALL_NERD_FONT}" == "true" ]]; then
+  if compgen -G "$HOME/.local/share/fonts/JetBrainsMonoNerd/*.ttf" >/dev/null 2>&1; then
+    info "JetBrains Mono Nerd Font already present; skipping download"
+  else
+    info "Installing JetBrains Mono Nerd Font"
+    tmpdir=$(mktemp -d)
+    mkdir -p "$HOME/.local/share/fonts"
+    curl -fL "${FONT_URL}" -o "$tmpdir/font.zip"
+    unzip -o "$tmpdir/font.zip" -d "$HOME/.local/share/fonts/JetBrainsMonoNerd" >/dev/null
+    fc-cache -f
+    rm -rf "$tmpdir"
+  fi
+else
+  info "Skipping Nerd Font install (set INSTALL_NERD_FONT=true to enable)"
+fi
 
 append_once() {
   local line="$1"
@@ -216,7 +245,7 @@ backup_and_copy() {
 
 info "Deploying configuration files (backups go to $BACKUP_ROOT if needed)"
 mkdir -p "$HOME/.config"
-for dir in hypr kitty matugen rofi waybar mako; do
+for dir in hypr kitty matugen rofi waybar mako swappy; do
   backup_and_copy "$dir"
 done
 
@@ -244,7 +273,7 @@ if ! pgrep -x swww-daemon >/dev/null 2>&1; then
 fi
 
 swww img "$1" --transition-type grow --transition-pos center >/dev/null 2>&1 || fail "swww failed"
-matugen image "$1" >/dev/null 2>&1 || fail "matugen failed"
+matugen image "$1" --source-color-index 0 >/dev/null 2>&1 || fail "matugen failed"
 
 ESCAPED=$(printf '%s\n' "$1" | sed 's/[&|]/\\&/g')
 NEW_TEXT="    background-image:            url(\"$ESCAPED\", height);"
@@ -260,6 +289,7 @@ echo "wallgen: success"
 EOF
 chmod +x "$HOME/.local/bin/wallgen"
 chmod +x "$HOME/.config/rofi/launchers/type-7/launcher.sh"
+chmod +x "$HOME/.config/rofi/powermenu.sh"
 
 info "Creating wallpaper directory"
 mkdir -p "$HOME/Pictures/Wallpapers"
@@ -272,7 +302,7 @@ fi
 if [[ "${ENABLE_BATTERY_TUNING}" == "true" ]]; then
   info "Applying battery optimizations (target user: ${TARGET_USER})"
 
-  sudo dnf install -y tlp tlp-rdw brightnessctl mesa-demos
+  sudo dnf ${DNF_INSTALL_FLAGS} install tlp tlp-rdw brightnessctl
 
   sudo systemctl stop power-profiles-daemon.service 2>/dev/null || true
   sudo systemctl mask power-profiles-daemon.service 2>/dev/null || true
@@ -284,8 +314,9 @@ if [[ "${ENABLE_BATTERY_TUNING}" == "true" ]]; then
 TLP_ENABLE=1
 
 # CPU
-CPU_SCALING_GOVERNOR_ON_AC=schedutil
-CPU_SCALING_GOVERNOR_ON_BAT=powersave
+# Keep governors at distro defaults for broad CPU compatibility.
+# CPU_SCALING_GOVERNOR_ON_AC=performance
+# CPU_SCALING_GOVERNOR_ON_BAT=powersave
 
 CPU_BOOST_ON_AC=1
 CPU_BOOST_ON_BAT=0
@@ -308,8 +339,7 @@ EOF
   sudo systemctl restart NetworkManager
 
   if command -v hyprctl >/dev/null 2>&1; then
-    sudo -u "$TARGET_USER" mkdir -p "$TARGET_HOME/.local/bin"
-    sudo tee "$TARGET_HOME/.local/bin/hypr-refresh.sh" >/dev/null <<EOF
+    sudo tee /usr/local/bin/hypr-refresh.sh >/dev/null <<EOF
 #!/usr/bin/env bash
 
 MONITOR="${MONITOR_NAME}"
@@ -317,17 +347,29 @@ RESOLUTION="${MONITOR_RESOLUTION}"
 BAT_REFRESH="${MONITOR_REFRESH_BAT}"
 AC_REFRESH="${MONITOR_REFRESH_AC}"
 
-POWER=$(cat /sys/class/power_supply/AC*/online 2>/dev/null | head -n1)
+RUNTIME_DIR="/run/user/$(id -u)"
+SIG_DIR=$(ls -1d "$RUNTIME_DIR"/hypr/* 2>/dev/null | head -n1)
+if [[ -z "$SIG_DIR" ]]; then
+  exit 0
+fi
+export HYPRLAND_INSTANCE_SIGNATURE="$(basename "$SIG_DIR")"
 
-if [ "$POWER" = "1" ]; then
-  hyprctl keyword monitor "$MONITOR,$RESOLUTION@$AC_REFRESH,0x0,1"
+POWER=\$(for ps in /sys/class/power_supply/*; do
+  [[ -f "\$ps/type" ]] || continue
+  if grep -qi "mains" "\$ps/type"; then
+    cat "\$ps/online" 2>/dev/null
+    break
+  fi
+done)
+
+if [ "\$POWER" = "1" ]; then
+  hyprctl keyword monitor "\$MONITOR,\$RESOLUTION@\$AC_REFRESH,0x0,1"
 else
-  hyprctl keyword monitor "$MONITOR,$RESOLUTION@$BAT_REFRESH,0x0,1"
+  hyprctl keyword monitor "\$MONITOR,\$RESOLUTION@\$BAT_REFRESH,0x0,1"
 fi
 EOF
 
-    sudo chmod +x "$TARGET_HOME/.local/bin/hypr-refresh.sh"
-    sudo chown -R "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.local"
+    sudo chmod 755 /usr/local/bin/hypr-refresh.sh
 
     sudo tee /etc/systemd/system/hypr-refresh.service >/dev/null <<EOF
 [Unit]
@@ -339,7 +381,7 @@ Type=oneshot
 User=${TARGET_USER}
 Environment=XDG_RUNTIME_DIR=/run/user/${TARGET_UID}
 Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${TARGET_UID}/bus
-ExecStart=${TARGET_HOME}/.local/bin/hypr-refresh.sh
+ExecStart=/usr/local/bin/hypr-refresh.sh
 
 [Install]
 WantedBy=multi-user.target
@@ -349,8 +391,8 @@ EOF
     sudo systemctl enable hypr-refresh.service
 
     sudo tee /etc/udev/rules.d/90-hypr-refresh.rules >/dev/null <<'EOF'
-SUBSYSTEM=="power_supply", ACTION=="change", RUN+="/usr/bin/systemctl restart hypr-refresh.service"
-EOF
+  SUBSYSTEM=="power_supply", ENV{POWER_SUPPLY_TYPE}=="Mains", ACTION=="change", RUN+="/usr/bin/systemctl restart hypr-refresh.service"
+  EOF
 
     sudo udevadm control --reload-rules
   else

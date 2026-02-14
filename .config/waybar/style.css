@@ -21,10 +21,11 @@ tooltip {
 tooltip label {
     background: @primary_container;
     color: @on_primary_container;
+    padding: 6px 18px 6px 10px;
 }
 
 #workspaces button {
-    padding: 8px 14px 5px;
+    padding: 5px 14px 5px;
     margin: 6px;
     border-radius: 10px;
     background: @primary;
@@ -32,7 +33,7 @@ tooltip label {
 }
 
 #workspaces button.active {
-    padding: 8px 20px 5px;
+    padding: 5px 20px 5px;
     margin: 6px;
     border-radius: 20px;
     background: @primary_container;
@@ -40,12 +41,45 @@ tooltip label {
 }
 
 #clock,
+#hyprland-window,
 #battery,
 #pulseaudio,
-#network {
-    padding: 8px 10px 5px;
+#network,
+#bluetooth,
+#custom-power {
+    padding: 6px 12px;
     margin: 6px;
     border-radius: 100px;
     background-color: @primary;
     color: @on_primary;
+}
+
+#window {
+    padding: 5px 10px 5px;
+    margin: 6px;
+    border-radius: 20px;
+    background: @primary_container;
+    color: @on_primary_container;
+}
+
+#custom-power {
+    padding-right: 15px;
+}
+
+#clock > box,
+#hyprland-window > box,
+#battery > box,
+#pulseaudio > box,
+#network > box,
+#bluetooth > box,
+#custom-power > box,
+#clock label,
+#hyprland-window label,
+#battery label,
+#pulseaudio label,
+#network label,
+#bluetooth label,
+#custom-power label {
+    padding: 0;
+    margin: 0;
 }
