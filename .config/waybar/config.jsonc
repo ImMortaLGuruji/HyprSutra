@@ -8,6 +8,8 @@
 		"hyprland/workspaces"
 	],
 	"modules-right": [
+		"tray",
+		"bluetooth",
 		"network",
 		"pulseaudio",
 		"battery"
@@ -72,5 +74,11 @@
 		"tooltip-format-ethernet": "{ifname} ",
 		"tooltip-format-disconnected": "Disconnected",
 		"max-length": 50
+	},
+	"bluetooth": {
+		"format": " {status}",
+		"format-connected": " {device_alias}",
+		"format-disabled": "",
+		"tooltip-format": "{device_alias} ({device_address})"
 	}
 }

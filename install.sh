@@ -86,11 +86,12 @@ has_user_systemd() {
 }
 
 info "Updating system and base tooling"
-sudo dnf -y upgrade
+sudo dnf -y upgrade --refresh
 sudo dnf -y install dnf-plugins-core curl wget unzip rsync git \
   wl-clipboard brightnessctl playerctl pavucontrol \
   grim slurp swappy polkit-gnome xdg-desktop-portal-hyprland xdg-desktop-portal-gtk \
-  kitty waybar rofi nautilus
+  kitty waybar rofi nautilus \
+  network-manager-applet blueman bluez mako hypridle hyprlock xdg-user-dirs xdg-user-dirs-gtk
 
 info "Enabling COPR repos for Hyprland and swww"
 sudo dnf -y copr enable solopasha/hyprland
@@ -181,14 +182,21 @@ unzip -o "$tmpdir/font.zip" -d "$HOME/.local/share/fonts/JetBrainsMonoNerd" >/de
 fc-cache -f
 rm -rf "$tmpdir"
 
+append_once() {
+  local line="$1"
+  local file="$2"
+
+  grep -qxF "$line" "$file" 2>/dev/null || echo "$line" >> "$file"
+}
+
 if [[ ":$PATH:" != *":$HOME/.local/bin:"* ]]; then
   info "Adding ~/.local/bin to PATH via ~/.bashrc"
-  echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$HOME/.bashrc"
+  append_once 'export PATH="$HOME/.local/bin:$PATH"' "$HOME/.bashrc"
 fi
 
 if [[ ":$PATH:" != *":$HOME/.cargo/bin:"* ]] && [[ "${INSTALL_MATUGEN_METHOD}" == "cargo" ]]; then
   info "Adding ~/.cargo/bin to PATH via ~/.bashrc"
-  echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$HOME/.bashrc"
+  append_once 'export PATH="$HOME/.cargo/bin:$PATH"' "$HOME/.bashrc"
 fi
 
 backup_and_copy() {
@@ -208,7 +216,7 @@ backup_and_copy() {
 
 info "Deploying configuration files (backups go to $BACKUP_ROOT if needed)"
 mkdir -p "$HOME/.config"
-for dir in hypr kitty matugen rofi waybar; do
+for dir in hypr kitty matugen rofi waybar mako; do
   backup_and_copy "$dir"
 done
 
@@ -216,15 +224,39 @@ info "Installing wallgen helper"
 mkdir -p "$HOME/.local/bin"
 cat > "$HOME/.local/bin/wallgen" <<'EOF'
 #!/usr/bin/env bash
-swww img "$1" --transition-type grow --transition-pos center
-matugen image "$1"
+set -euo pipefail
 
-LINE_NUM=75
+fail() {
+  echo "wallgen: failed - $1"
+  exit 1
+}
+
+if [[ $# -lt 1 ]]; then
+  fail "missing wallpaper path"
+fi
+
+if [[ ! -f "$1" ]]; then
+  fail "wallpaper not found"
+fi
+
+if ! pgrep -x swww-daemon >/dev/null 2>&1; then
+  swww init >/dev/null 2>&1 || fail "could not start swww"
+fi
+
+swww img "$1" --transition-type grow --transition-pos center >/dev/null 2>&1 || fail "swww failed"
+matugen image "$1" >/dev/null 2>&1 || fail "matugen failed"
+
 ESCAPED=$(printf '%s\n' "$1" | sed 's/[&|]/\\&/g')
 NEW_TEXT="    background-image:            url(\"$ESCAPED\", height);"
 FILE="$HOME/.config/rofi/launchers/type-7/style-7.rasi"
 
-sed -i "${LINE_NUM}s|.*|${NEW_TEXT}|" "$FILE"
+if [[ -f "$FILE" ]]; then
+  sed -i -E "s|^[[:space:]]*background-image:.*|${NEW_TEXT}|" "$FILE" >/dev/null 2>&1 || fail "rofi theme update failed"
+else
+  fail "rofi theme not found"
+fi
+
+echo "wallgen: success"
 EOF
 chmod +x "$HOME/.local/bin/wallgen"
 chmod +x "$HOME/.config/rofi/launchers/type-7/launcher.sh"
@@ -288,41 +320,36 @@ AC_REFRESH="${MONITOR_REFRESH_AC}"
 POWER=$(cat /sys/class/power_supply/AC*/online 2>/dev/null | head -n1)
 
 if [ "$POWER" = "1" ]; then
-    hyprctl keyword monitor "$MONITOR,$RESOLUTION@$AC_REFRESH,0x0,1"
+  hyprctl keyword monitor "$MONITOR,$RESOLUTION@$AC_REFRESH,0x0,1"
 else
-    hyprctl keyword monitor "$MONITOR,$RESOLUTION@$BAT_REFRESH,0x0,1"
+  hyprctl keyword monitor "$MONITOR,$RESOLUTION@$BAT_REFRESH,0x0,1"
 fi
 EOF
 
     sudo chmod +x "$TARGET_HOME/.local/bin/hypr-refresh.sh"
     sudo chown -R "$TARGET_USER:$TARGET_USER" "$TARGET_HOME/.local"
 
-    sudo -u "$TARGET_USER" mkdir -p "$TARGET_HOME/.config/systemd/user"
-    sudo tee "$TARGET_HOME/.config/systemd/user/hypr-refresh.service" >/dev/null <<'EOF'
+    sudo tee /etc/systemd/system/hypr-refresh.service >/dev/null <<EOF
 [Unit]
 Description=Hyprland Auto Refresh Rate Switch
+After=systemd-logind.service
 
 [Service]
 Type=oneshot
-ExecStart=%h/.local/bin/hypr-refresh.sh
+User=${TARGET_USER}
+Environment=XDG_RUNTIME_DIR=/run/user/${TARGET_UID}
+Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${TARGET_UID}/bus
+ExecStart=${TARGET_HOME}/.local/bin/hypr-refresh.sh
 
 [Install]
-WantedBy=default.target
+WantedBy=multi-user.target
 EOF
 
-    if command -v loginctl >/dev/null 2>&1; then
-      sudo loginctl enable-linger "$TARGET_USER" || true
-    fi
-
-    if has_user_systemd; then
-      user_systemctl daemon-reload
-      user_systemctl enable hypr-refresh.service
-    else
-      info "User systemd not detected; enable hypr-refresh.service after login with: systemctl --user enable hypr-refresh.service"
-    fi
+    sudo systemctl daemon-reload
+    sudo systemctl enable hypr-refresh.service
 
     sudo tee /etc/udev/rules.d/90-hypr-refresh.rules >/dev/null <<'EOF'
-SUBSYSTEM=="power_supply", ACTION=="change", RUN+="/usr/bin/systemctl --user restart hypr-refresh.service"
+SUBSYSTEM=="power_supply", ACTION=="change", RUN+="/usr/bin/systemctl restart hypr-refresh.service"
 EOF
 
     sudo udevadm control --reload-rules
@@ -335,6 +362,9 @@ EOF
 else
   info "Skipping battery optimizations (set ENABLE_BATTERY_TUNING=true to enable)"
 fi
+
+info "Enabling Bluetooth service"
+sudo systemctl enable --now bluetooth.service
 
 info "Done. Log out and pick the Hyprland session."
 echo "Set your wallpaper and recolor the desktop with: wallgen ~/Pictures/Wallpapers/your-image.jpg"
