@@ -15,7 +15,7 @@ post_hook = 'hyprctl reload'
 [templates.kitty]
 input_path = '~/.config/matugen/templates/kitty-colours.conf'
 output_path = '~/.config/kitty/colours.conf'
-post_hook = 'kill -SIGUSR1 $(pgrep kitty)'
+post_hook = '/usr/bin/pkill -USR1 -x kitty >/dev/null 2>&1 || true'
 
 [templates.rofi]
 input_path = '~/.config/matugen/templates/rofi-colours.rasi'
@@ -24,4 +24,4 @@ output_path = '~/.config/rofi/colours.rasi'
 [templates.waybar]
 input_path = '~/.config/matugen/templates/colours.css'
 output_path = '~/.config/waybar/colours.css'
-post_hook = 'pkill waybar; waybar & disown'
+post_hook = '/usr/bin/waybar-msg reload >/dev/null 2>&1 || /usr/bin/pkill -SIGUSR2 waybar >/dev/null 2>&1 || (/usr/bin/pkill waybar >/dev/null 2>&1; /usr/bin/nohup /usr/bin/waybar >/dev/null 2>&1 &)'

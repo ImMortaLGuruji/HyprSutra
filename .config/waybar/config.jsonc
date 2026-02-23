@@ -15,6 +15,7 @@
 		"battery"
 	],
 	"battery": {
+		"interval": 30,
 		"format": "{capacity}% {icon} ",
 		"format-icons": [
 			"",
@@ -25,6 +26,7 @@
 		]
 	},
 	"clock": {
+		"interval": 60,
 		"format-alt": "{:%a, %d. %b  %H:%M}"
 	},
 	"custom/power": {
@@ -71,6 +73,7 @@
 	},
 	"network": {
 		"interface": "wlp4s0",
+		"interval": 10,
 		"format": "{ifname}",
 		"format-wifi": "{essid}  ",
 		"format-ethernet": "{ipaddr}/{cidr} 󰊗 ",
@@ -86,7 +89,7 @@
 	"bluetooth": {
 		"format": "{status} ",
 		"format-connected": "{device_alias} ",
-		"format-disabled": "",
+		"format-disabled": "Off ",
 		"tooltip-format": "{device_alias} ({device_address})",
 		"on-click": "blueman-manager"
 	}

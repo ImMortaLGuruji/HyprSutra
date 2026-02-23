@@ -138,6 +138,15 @@ GBM_BACKEND=nvidia-drm
 __GLX_VENDOR_LIBRARY_NAME=nvidia
 EOF
     fi
+
+    info "Enabling NVIDIA dynamic power management"
+    sudo tee /etc/modprobe.d/nvidia-power.conf >/dev/null <<'EOF'
+options nvidia NVreg_DynamicPowerManagement=0x02
+EOF
+
+    if systemctl list-unit-files | grep -q '^nvidia-powerd.service'; then
+      sudo systemctl enable --now nvidia-powerd.service
+    fi
     ;;
   amd|intel)
     info "GPU vendor ${GPU_VENDOR} detected; no vendor-specific packages needed"
@@ -268,12 +277,25 @@ if [[ ! -f "$1" ]]; then
   fail "wallpaper not found"
 fi
 
+MATUGEN_BIN="${MATUGEN_BIN:-}"
+if [[ -z "$MATUGEN_BIN" ]]; then
+  if [[ -x "$HOME/.cargo/bin/matugen" ]]; then
+    MATUGEN_BIN="$HOME/.cargo/bin/matugen"
+  elif [[ -x "$HOME/.local/bin/matugen" ]]; then
+    MATUGEN_BIN="$HOME/.local/bin/matugen"
+  elif command -v matugen >/dev/null 2>&1; then
+    MATUGEN_BIN="$(command -v matugen)"
+  else
+    fail "matugen not found (expected in PATH or ~/.cargo/bin/matugen)"
+  fi
+fi
+
 if ! pgrep -x swww-daemon >/dev/null 2>&1; then
   swww init >/dev/null 2>&1 || fail "could not start swww"
 fi
 
 swww img "$1" --transition-type grow --transition-pos center >/dev/null 2>&1 || fail "swww failed"
-matugen image "$1" --source-color-index 0 >/dev/null 2>&1 || fail "matugen failed"
+"$MATUGEN_BIN" image "$1" --source-color-index 0 >/dev/null 2>&1 || fail "matugen failed"
 
 ESCAPED=$(printf '%s\n' "$1" | sed 's/[&|]/\\&/g')
 NEW_TEXT="    background-image:            url(\"$ESCAPED\", height);"
@@ -290,6 +312,8 @@ EOF
 chmod +x "$HOME/.local/bin/wallgen"
 chmod +x "$HOME/.config/rofi/launchers/type-7/launcher.sh"
 chmod +x "$HOME/.config/rofi/powermenu.sh"
+chmod +x "$HOME/.config/rofi/wallgen-menu.sh"
+chmod +x "$HOME/.config/hypr/scripts/battery-mode.sh"
 
 info "Creating wallpaper directory"
 mkdir -p "$HOME/Pictures/Wallpapers"
@@ -324,10 +348,24 @@ CPU_BOOST_ON_BAT=0
 CPU_ENERGY_PERF_POLICY_ON_AC=performance
 CPU_ENERGY_PERF_POLICY_ON_BAT=power
 
+# Wi-Fi
+WIFI_PWR_ON_AC=off
+WIFI_PWR_ON_BAT=on
+
+# Audio
+SOUND_POWER_SAVE_ON_AC=0
+SOUND_POWER_SAVE_ON_BAT=1
+SOUND_POWER_SAVE_CONTROLLER=Y
+
 # Platform
 PCIE_ASPM_ON_BAT=powersupersave
 RUNTIME_PM_ON_BAT=auto
 USB_AUTOSUSPEND=1
+
+# Storage
+SATA_LINKPWR_ON_AC=med_power
+SATA_LINKPWR_ON_BAT=min_power
+AHCI_RUNTIME_PM_ON_BAT=auto
 EOF
 
   sudo mkdir -p /etc/NetworkManager/conf.d
@@ -393,6 +431,91 @@ EOF
     sudo tee /etc/udev/rules.d/90-hypr-refresh.rules >/dev/null <<'EOF'
   SUBSYSTEM=="power_supply", ENV{POWER_SUPPLY_TYPE}=="Mains", ACTION=="change", RUN+="/usr/bin/systemctl restart hypr-refresh.service"
   EOF
+
+    sudo tee /usr/local/bin/battery-bluetooth.sh >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+if ! command -v rfkill >/dev/null 2>&1; then
+  exit 0
+fi
+
+POWER=$(for ps in /sys/class/power_supply/*; do
+  [[ -f "$ps/type" ]] || continue
+  if grep -qi "mains" "$ps/type"; then
+    cat "$ps/online" 2>/dev/null
+    break
+  fi
+done)
+
+if [ "$POWER" = "1" ]; then
+  rfkill unblock bluetooth
+else
+  rfkill block bluetooth
+fi
+EOF
+    sudo chmod 755 /usr/local/bin/battery-bluetooth.sh
+
+    sudo tee /etc/udev/rules.d/91-battery-bluetooth.rules >/dev/null <<'EOF'
+SUBSYSTEM=="power_supply", ENV{POWER_SUPPLY_TYPE}=="Mains", ACTION=="change", RUN+="/usr/local/bin/battery-bluetooth.sh"
+EOF
+
+    sudo tee /usr/local/bin/battery-mode-auto.sh >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+
+TARGET_USER="${TARGET_USER:-}"
+TARGET_UID="${TARGET_UID:-}"
+TARGET_HOME="${TARGET_HOME:-}"
+
+if [[ -z "$TARGET_USER" || -z "$TARGET_UID" || -z "$TARGET_HOME" ]]; then
+  exit 0
+fi
+
+POWER=$(for ps in /sys/class/power_supply/*; do
+  [[ -f "\$ps/type" ]] || continue
+  if grep -qi "mains" "\$ps/type"; then
+    cat "\$ps/online" 2>/dev/null
+    break
+  fi
+done)
+
+if [ "\$POWER" = "1" ]; then
+  runuser -u "$TARGET_USER" -- \
+    env XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
+    "$TARGET_HOME/.config/hypr/scripts/battery-mode.sh" off
+else
+  runuser -u "$TARGET_USER" -- \
+    env XDG_RUNTIME_DIR="/run/user/${TARGET_UID}" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${TARGET_UID}/bus" \
+    "$TARGET_HOME/.config/hypr/scripts/battery-mode.sh" on
+fi
+EOF
+    sudo chmod 755 /usr/local/bin/battery-mode-auto.sh
+
+    sudo tee /etc/systemd/system/battery-mode.service >/dev/null <<EOF
+[Unit]
+Description=Battery Mode Toggle
+After=systemd-logind.service
+
+[Service]
+Type=oneshot
+  Environment=TARGET_USER=${TARGET_USER}
+  Environment=TARGET_UID=${TARGET_UID}
+  Environment=TARGET_HOME=${TARGET_HOME}
+ExecStart=/usr/local/bin/battery-mode-auto.sh
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    sudo systemctl daemon-reload
+    sudo systemctl enable battery-mode.service
+
+    sudo tee /etc/udev/rules.d/92-battery-mode.rules >/dev/null <<'EOF'
+SUBSYSTEM=="power_supply", ENV{POWER_SUPPLY_TYPE}=="Mains", ACTION=="change", RUN+="/usr/bin/systemctl restart battery-mode.service"
+EOF
 
     sudo udevadm control --reload-rules
   else
